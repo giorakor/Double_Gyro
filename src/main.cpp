@@ -36,10 +36,9 @@ bool GRN_LED;
 void readAnalogs()
 {
   A_FB = analogRead(PIN_A_FB);
-  A_Speed = analogRead(PIN_A_SPEED);
+  A_Speed = 1023 - analogRead(PIN_A_SPEED);
   A_tilt_W = analogRead(PIN_A_tilt_W);
 }
-
 void print_tele()
 {
   Serial.print("valT ");
@@ -51,7 +50,14 @@ void toggle(bool &flag)
 {
   flag = 1 - flag;
 }
-
+float clipF(float val, float lower, float upper)
+{
+  if (val > upper)
+    val = upper;
+  if (val < lower)
+    val = lower;
+  return (val);
+}
 void toggle_GRNLED(uint32_t delay_time)
 {
   if (millis() - lastGRNblink > delay_time)
@@ -61,7 +67,6 @@ void toggle_GRNLED(uint32_t delay_time)
     digitalWrite(PIN_GRNLED, GRN_LED);
   }
 }
-
 void control_LEDs()
 {
   if (GRN_LED)
@@ -77,6 +82,49 @@ void control_LEDs()
     digitalWrite(PIN_REDLED, HIGH);
     last_tilt_updated_LED = tilt_W;
   }
+}
+void control_discs()
+{
+  val_discs_speed = servo_zero + A_Speed / 18;
+  disc1.write(val_discs_speed);
+  disc2.write(val_discs_speed);
+}
+void send_tilter(float PWM_delta)
+{
+  val_tilter = clipF(servo_zero + PWM_delta, servo_zero - max_tilter_pwr, servo_zero + max_tilter_pwr);
+  tilter.write(int(val_tilter));
+}
+void control_tilt_PID()
+{
+  tilt_A = float(A_FB - tilt_zero_value) * POT2RAD;
+  prev_tilt_W = tilt_W;
+  tilt_W = (float(A_tilt_W - 511) * POT2RAD) / 5;
+  tilt_W = clipF(tilt_W, tilt_lower_limit, tilt_upper_limit);
+  vel_W = 1000 * (tilt_W - prev_tilt_W) / (cycle_time);
+  error = tilt_W - tilt_A;
+  send_tilter(error * Kp + vel_W * FF);
+}
+void control_tilt_power()
+{
+  tilt_A = float(A_FB - tilt_zero_value) * POT2RAD;
+  tilt_W = float(A_tilt_W - 511);
+  if (tilt_W > 0)
+    tilt_W = max(0, tilt_W - 100);
+  if (tilt_W < 0)
+    tilt_W = min(0, tilt_W + 100);
+  tilt_W = tilt_W / 5.9;
+  if (tilt_W < 0 && tilt_A <= tilt_lower_limit * .9)
+    tilt_W = 0;
+  if (tilt_W > 0 && tilt_A >= tilt_upper_limit * .8)
+    tilt_W = 0;
+  send_tilter(tilt_W);
+}
+void wait_for_cycle()
+{
+  while (millis() - last_time < cycle_time)
+  {
+  }
+  last_time = millis();
 }
 void setup()
 {
@@ -94,35 +142,13 @@ void setup()
   tilter.attach(PIN_TILTER);
 }
 
-float clipF(float val, float lower, float upper)
-{
-  if (val > upper)
-    val = upper;
-  if (val < lower)
-    val = lower;
-  return (val);
-}
-
 void loop()
 {
-  while (millis() - last_time < cycle_time)
-  {
-  }
-  last_time = millis();
+  wait_for_cycle();
   readAnalogs();
-  val_discs_speed = servo_zero + A_Speed / 18;
-
-  tilt_A = float(A_FB - tilt_zero_value) * POT2RAD;
-  prev_tilt_W = tilt_W;
-  tilt_W = (float(A_tilt_W - 511) * POT2RAD) / 2;
-  tilt_W = clipF(tilt_W, tilt_lower_limit, tilt_upper_limit);
-  vel_W = 1000 * (tilt_W - prev_tilt_W) / (cycle_time);
-  error = tilt_W - tilt_A;
-  val_tilter = clipF(servo_zero + error * Kp + vel_W * FF, servo_zero - max_tilter_pwr, servo_zero + max_tilter_pwr);
-  disc1.write(val_discs_speed);
-  disc2.write(val_discs_speed);
-  tilter.write(int(val_tilter));
-
+  control_discs();
+  //control_tilt_PID();
+  control_tilt_power();
   control_LEDs();
   // print_tele();
 }
