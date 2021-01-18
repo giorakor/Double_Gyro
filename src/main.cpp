@@ -28,16 +28,43 @@ Servo tilter;
 
 int A_FB, A_Speed, A_tilt_W;
 int val_discs_speed;
+int walk_dir = 1;
 float val_tilter;
-float tilt_A, tilt_W, prev_tilt_W, vel_W, error, last_tilt_updated_LED;
-long last_time, lastGRNblink;
-bool GRN_LED;
+float tilt_A, tilt_W, prev_tilt_W, vel_W, error;
+long last_time, lastGRNblink, lastREDblink, last_changed_dir;
+bool GRN_LED, RED_LED;
+char one_PID_0_PWR, walk, SW1_raw, SW2_raw, SW1, SW2, SW1_count, SW2_count, SW1_prev_raw, SW2_prev_raw, SW1_prev, SW2_prev;
 
-void readAnalogs()
+void readPIN_Inputs()
 {
   A_FB = analogRead(PIN_A_FB);
   A_Speed = 1023 - analogRead(PIN_A_SPEED);
   A_tilt_W = analogRead(PIN_A_tilt_W);
+  tilt_A = float(A_FB - tilt_zero_value) * POT2RAD;
+  SW1_prev_raw = SW1_raw;
+  SW2_prev_raw = SW2_raw;
+  SW1_prev = SW1;
+  SW2_prev = SW2;
+  SW1_raw = 1 - digitalRead(PIN_SW1);
+  SW2_raw = 1 - digitalRead(PIN_SW2);
+  if (SW1_raw == SW1_prev_raw)
+    SW1_count += 1;
+  else
+    SW1_count = 0;
+  if (SW2_raw == SW2_prev_raw)
+    SW2_count += 1;
+  else
+    SW2_count = 0;
+  if (SW1_count > 50)
+  {
+    SW1 = SW1_raw;
+    SW1_count = 51;
+  }
+  if (SW2_count > 50)
+  {
+    SW2 = SW2_raw;
+    SW2_count = 51;
+  }
 }
 void print_tele()
 {
@@ -67,21 +94,25 @@ void toggle_GRNLED(uint32_t delay_time)
     digitalWrite(PIN_GRNLED, GRN_LED);
   }
 }
+void toggle_REDLED(uint32_t delay_time)
+{
+  if (millis() - lastREDblink > delay_time)
+  {
+    toggle(RED_LED);
+    lastREDblink = millis();
+    digitalWrite(PIN_REDLED, RED_LED);
+  }
+}
 void control_LEDs()
 {
   if (GRN_LED)
     toggle_GRNLED(1);
   else
     toggle_GRNLED(50 + (1023 - A_Speed) / 2);
-  if (abs(last_tilt_updated_LED - tilt_W) < 0.03)
-  {
-    digitalWrite(PIN_REDLED, LOW);
-  }
+  if (RED_LED)
+    toggle_REDLED(1);
   else
-  {
-    digitalWrite(PIN_REDLED, HIGH);
-    last_tilt_updated_LED = tilt_W;
-  }
+    toggle_REDLED(1000 - 700 * one_PID_0_PWR);
 }
 void control_discs()
 {
@@ -96,7 +127,6 @@ void send_tilter(float PWM_delta)
 }
 void control_tilt_PID()
 {
-  tilt_A = float(A_FB - tilt_zero_value) * POT2RAD;
   prev_tilt_W = tilt_W;
   tilt_W = (float(A_tilt_W - 511) * POT2RAD) / 5;
   tilt_W = clipF(tilt_W, tilt_lower_limit, tilt_upper_limit);
@@ -106,7 +136,6 @@ void control_tilt_PID()
 }
 void control_tilt_power()
 {
-  tilt_A = float(A_FB - tilt_zero_value) * POT2RAD;
   tilt_W = float(A_tilt_W - 511);
   if (tilt_W > 0)
     tilt_W = max(0, tilt_W - 100);
@@ -119,6 +148,21 @@ void control_tilt_power()
     tilt_W = 0;
   send_tilter(tilt_W);
 }
+void control_tilt_walk()
+{
+  if (millis() - last_changed_dir > 2000)
+  {
+    last_changed_dir = millis();
+    walk_dir = -walk_dir;
+  }
+  tilt_W = abs(float(A_tilt_W - 511)) / 7 * walk_dir;
+  if (tilt_W < 0 && tilt_A <= tilt_lower_limit * .9)
+    tilt_W = 0;
+  if (tilt_W > 0 && tilt_A >= tilt_upper_limit * .8)
+    tilt_W = 0;
+  send_tilter(tilt_W);
+}
+
 void wait_for_cycle()
 {
   while (millis() - last_time < cycle_time)
@@ -145,10 +189,21 @@ void setup()
 void loop()
 {
   wait_for_cycle();
-  readAnalogs();
+  readPIN_Inputs();
   control_discs();
-  //control_tilt_PID();
-  control_tilt_power();
+  if (!SW1 && SW1_prev)
+    one_PID_0_PWR = 1 - one_PID_0_PWR;
+  if (!SW2 && SW2_prev)
+    walk = 1 - walk;
+  if (walk)
+    control_tilt_walk();
+  else
+  {
+    if (one_PID_0_PWR)
+      control_tilt_PID();
+    else
+      control_tilt_power();
+  }
   control_LEDs();
   // print_tele();
 }
